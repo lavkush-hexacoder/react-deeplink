@@ -2,7 +2,11 @@ import React, { useState, useCallback, useMemo } from "react";
 
 // Types
 interface Slot {
-  type: "path_segment" | "query_param" | "fragment_param";
+  type:
+    | "path_segment"
+    | "query_param"
+    | "fragment_path_segment"
+    | "fragment_query_param";
   name?: string;
   value: string;
   position?: number;
@@ -13,9 +17,10 @@ interface ParsedUrl {
   origin: string;
   host: string;
   scheme: string;
-  pathSegments: Slot[];
+  pathSlots: Slot[];
   querySlots: Slot[];
-  fragmentSlots: Slot[];
+  fragmentPathSlots: Slot[];
+  fragmentQuerySlots: Slot[];
 }
 
 interface MappingRule {
@@ -26,7 +31,6 @@ interface MappingRule {
   segmentIndex: number | null;
   sourceVar: string;
   formatPattern: string;
-  uppercase: boolean;
 }
 
 interface Template {
@@ -53,7 +57,7 @@ const INTERNAL_VARIABLES = [
 
 // Utility functions
 function slotId(slot: Slot): string {
-  if (slot.type === "path_segment") {
+  if (slot.type === "path_segment" || slot.type === "fragment_path_segment") {
     return `${slot.type}:${slot.segmentIndex}`;
   }
   return `${slot.type}:${slot.name}:${slot.position}`;
@@ -62,7 +66,7 @@ function slotId(slot: Slot): string {
 function parseExampleUrl(exampleUrl: string): ParsedUrl {
   const url = new URL(exampleUrl);
 
-  const pathSegments: Slot[] = url.pathname
+  const pathSlots: Slot[] = url.pathname
     .split("/")
     .filter(Boolean)
     .map((value, index) => ({
@@ -78,54 +82,116 @@ function parseExampleUrl(exampleUrl: string): ParsedUrl {
     pos += 1;
   }
 
-  const fragmentSlots: Slot[] = [];
+  const fragmentPathSlots: Slot[] = [];
+  const fragmentQuerySlots: Slot[] = [];
+
   if (url.hash && url.hash.length > 1) {
     const frag = url.hash.substring(1);
 
-    // Check if fragment contains query parameters (indicated by ? or =)
-    if (frag.includes("=")) {
-      // If fragment contains ?, split on ? first to separate path from query
-      let queryPart = frag;
-      if (frag.includes("?")) {
-        const parts = frag.split("?");
-        // Everything after the first ? is treated as query parameters
-        queryPart = parts.slice(1).join("?");
+    // Check if fragment contains query parameters (indicated by ?)
+    if (frag.includes("?")) {
+      // Split on ? to separate path from query parameters
+      const parts = frag.split("?");
+      const pathPart = parts[0];
+      const queryPart = parts.slice(1).join("?"); // Rejoin in case there are multiple ?s
+
+      // Parse path part into individual segments (e.g., "/booking/a/" -> ["booking", "a"])
+      if (pathPart) {
+        const segments = pathPart.split("/").filter(Boolean); // Filter out empty strings from leading/trailing slashes
+        segments.forEach((segment, index) => {
+          fragmentPathSlots.push({
+            value: segment,
+            segmentIndex: index,
+            position: index,
+            type: "fragment_path_segment",
+          });
+        });
       }
 
-      // Parse query parameters
-      const pairs = queryPart.split("&");
+      // Parse query parameters after the ?
+      if (queryPart) {
+        const pairs = queryPart.split("&");
+        let pos = 0;
+        pairs.forEach((pair) => {
+          const trimmedPair = pair.trim();
+          if (!trimmedPair) return; // Skip empty pairs
+
+          if (trimmedPair.includes("=")) {
+            const equalIndex = trimmedPair.indexOf("=");
+            const name = trimmedPair.substring(0, equalIndex);
+            const value = trimmedPair.substring(equalIndex + 1);
+            fragmentQuerySlots.push({
+              name: decodeURIComponent(name),
+              value: decodeURIComponent(value),
+              position: pos,
+              type: "fragment_query_param",
+            });
+            pos += 1;
+          } else {
+            // Handle parameters without values (e.g., "roomName&bedType")
+            fragmentQuerySlots.push({
+              name: decodeURIComponent(trimmedPair),
+              value: "",
+              position: pos,
+              type: "fragment_query_param",
+            });
+            pos += 1;
+          }
+        });
+      }
+    } else if (frag.includes("=") || frag.includes("&")) {
+      // Fragment has query-like structure but no ? separator
+      // Treat entire fragment as query parameters
+      const pairs = frag.split("&");
       let pos = 0;
       pairs.forEach((pair) => {
-        // Only process pairs that actually contain =
-        if (pair.includes("=")) {
-          const equalIndex = pair.indexOf("=");
-          const name = pair.substring(0, equalIndex);
-          const value = pair.substring(equalIndex + 1);
-          fragmentSlots.push({
-            name,
+        const trimmedPair = pair.trim();
+        if (!trimmedPair) return; // Skip empty pairs
+
+        if (trimmedPair.includes("=")) {
+          const equalIndex = trimmedPair.indexOf("=");
+          const name = trimmedPair.substring(0, equalIndex);
+          const value = trimmedPair.substring(equalIndex + 1);
+          fragmentQuerySlots.push({
+            name: decodeURIComponent(name),
             value: decodeURIComponent(value),
             position: pos,
-            type: "fragment_param",
+            type: "fragment_query_param",
           });
           pos += 1;
-        } else if (pair.trim()) {
-          // Handle parameters without values (e.g., "roomName&bedType")
-          fragmentSlots.push({
-            name: pair,
+        } else {
+          // Handle parameters without values
+          fragmentQuerySlots.push({
+            name: decodeURIComponent(trimmedPair),
             value: "",
             position: pos,
-            type: "fragment_param",
+            type: "fragment_query_param",
           });
           pos += 1;
         }
       });
     } else {
-      fragmentSlots.push({
-        name: "fragment",
-        value: frag,
-        position: 0,
-        type: "fragment_param",
-      });
+      // Simple fragment without query parameters
+      // Check if it looks like a path (starts with /) and parse as segments
+      if (frag.startsWith("/")) {
+        const segments = frag.split("/").filter(Boolean);
+        segments.forEach((segment, index) => {
+          fragmentPathSlots.push({
+            value: segment,
+            segmentIndex: index,
+            position: index,
+            type: "fragment_path_segment",
+          });
+        });
+      } else {
+        // Simple text fragment - treat as a single path segment
+        fragmentPathSlots.push({
+          value: frag,
+          segmentIndex: 0,
+          position: 0,
+          type: "fragment_path_segment",
+        });
+      }
     }
   }
 
@@ -133,9 +199,10 @@ function parseExampleUrl(exampleUrl: string): ParsedUrl {
     origin: url.origin,
     host: url.host,
     scheme: url.protocol.replace(":", ""),
-    pathSegments,
+    pathSlots,
     querySlots,
-    fragmentSlots,
+    fragmentPathSlots,
+    fragmentQuerySlots,
   };
 }
 
@@ -170,8 +237,9 @@ function autoSuggestMappings(
   const lowerName = (name?: string) => (name || "").toLowerCase();
   const candidates = [
     ...parsed.querySlots,
-    ...parsed.pathSegments,
-    ...parsed.fragmentSlots,
+    ...parsed.pathSlots,
+    ...parsed.fragmentPathSlots,
+    ...parsed.fragmentQuerySlots,
   ];
 
   const newRules: MappingRule[] = [];
@@ -183,7 +251,6 @@ function autoSuggestMappings(
 
     let sourceVar: string | null = null;
     let formatPattern = "";
-    let uppercase = false;
 
     if (
       ["checkin", "ci", "arrive", "from", "fechaentrada"].some((k) =>
@@ -210,7 +277,6 @@ function autoSuggestMappings(
       sourceVar = "currency";
     } else if (name === "promo" || name === "promocode" || name === "code") {
       sourceVar = "promoCode";
-      uppercase = true;
     } else if (name.includes("hotelcode") || name.includes("hotelid")) {
       sourceVar = "hotelId";
     } else if (name === "nights") {
@@ -226,7 +292,6 @@ function autoSuggestMappings(
         segmentIndex: slot.segmentIndex ?? null,
         sourceVar,
         formatPattern: formatPattern || defaultFormatForVar(sourceVar),
-        uppercase,
       });
     }
   });
@@ -275,12 +340,13 @@ export default function DeepLinkTemplateBuilder() {
         }
 
         const slot = [
-          ...parsed.pathSegments,
+          ...parsed.pathSlots,
           ...parsed.querySlots,
-          ...parsed.fragmentSlots,
+          ...parsed.fragmentPathSlots,
+          ...parsed.fragmentQuerySlots,
         ].find((s) => {
           const id =
-            s.type === "path_segment"
+            s.type === "path_segment" || s.type === "fragment_path_segment"
               ? `${s.type}:${s.segmentIndex}`
               : `${s.type}:${s.name}:${s.position}`;
           return id === slotIdParam;
@@ -296,7 +362,6 @@ export default function DeepLinkTemplateBuilder() {
           segmentIndex: slot.segmentIndex ?? null,
           sourceVar,
           formatPattern: defaultFormatForVar(sourceVar),
-          uppercase: false,
         };
 
         if (existing) {
@@ -320,21 +385,13 @@ export default function DeepLinkTemplateBuilder() {
     []
   );
 
-  const handleUppercaseChange = useCallback(
-    (slotIdParam: string, uppercase: boolean) => {
-      setMappingRules((prev) =>
-        prev.map((r) => (r.id === slotIdParam ? { ...r, uppercase } : r))
-      );
-    },
-    []
-  );
-
   const allSlots = useMemo(() => {
     if (!parsed) return [];
     return [
-      ...parsed.pathSegments,
+      ...parsed.pathSlots,
       ...parsed.querySlots,
-      ...parsed.fragmentSlots,
+      ...parsed.fragmentPathSlots,
+      ...parsed.fragmentQuerySlots,
     ];
   }, [parsed]);
 
@@ -351,7 +408,17 @@ export default function DeepLinkTemplateBuilder() {
 
   const sortedSlots = useMemo(() => {
     return [...filteredSlots].sort((a, b) => {
-      if (a.type !== b.type) return a.type.localeCompare(b.type);
+      // Define type order for consistent sorting
+      const typeOrder: Record<string, number> = {
+        path_segment: 0,
+        query_param: 1,
+        fragment_path_segment: 2,
+        fragment_query_param: 3,
+      };
+      const aOrder = typeOrder[a.type] ?? 999;
+      const bOrder = typeOrder[b.type] ?? 999;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+
       if (a.segmentIndex != null && b.segmentIndex != null) {
         return a.segmentIndex - b.segmentIndex;
       }
@@ -404,9 +471,10 @@ export default function DeepLinkTemplateBuilder() {
         {parsed && (
           <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
             <span>Host: {parsed.host}</span>
-            <span>Path segments: {parsed.pathSegments.length}</span>
+            <span>Path slots: {parsed.pathSlots.length}</span>
             <span>Query params: {parsed.querySlots.length}</span>
-            <span>Fragment params: {parsed.fragmentSlots.length}</span>
+            <span>Fragment paths: {parsed.fragmentPathSlots.length}</span>
+            <span>Fragment queries: {parsed.fragmentQuerySlots.length}</span>
           </div>
         )}
       </section>
@@ -439,21 +507,21 @@ export default function DeepLinkTemplateBuilder() {
                 <th style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
                   Format
                 </th>
-                <th style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
-                  Uppercase
-                </th>
               </tr>
             </thead>
             <tbody>
               {sortedSlots.map((slot) => {
                 const id =
-                  slot.type === "path_segment"
+                  slot.type === "path_segment" ||
+                  slot.type === "fragment_path_segment"
                     ? `${slot.type}:${slot.segmentIndex}`
                     : `${slot.type}:${slot.name}:${slot.position}`;
                 const rule = mappingRules.find((r) => r.id === id);
                 const slotLabel =
                   slot.type === "path_segment"
                     ? `SEG ${slot.segmentIndex}`
+                    : slot.type === "fragment_path_segment"
+                    ? `FRAG_PATH ${slot.segmentIndex}`
                     : `${slot.name || "?"} (#${slot.position ?? 0})`;
                 const isDate =
                   rule?.sourceVar === "checkIn" ||
@@ -493,19 +561,6 @@ export default function DeepLinkTemplateBuilder() {
                           }
                           placeholder="YYYY-MM-DD"
                           style={{ width: "100%", padding: "0.25rem" }}
-                        />
-                      ) : (
-                        <span>—</span>
-                      )}
-                    </td>
-                    <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
-                      {rule?.sourceVar ? (
-                        <input
-                          type="checkbox"
-                          checked={rule?.uppercase || false}
-                          onChange={(e) =>
-                            handleUppercaseChange(id, e.target.checked)
-                          }
                         />
                       ) : (
                         <span>—</span>
