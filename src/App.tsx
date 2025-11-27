@@ -360,8 +360,12 @@ export default function DeepLinkTemplateBuilder() {
         };
 
         if (existing) {
+          // If sourceVar changed, reset formatPattern to default for new sourceVar
+          // This ensures formatPattern is cleared when switching from date to non-date fields
+          const formatPattern = defaultFormatForVar(sourceVar);
+
           return prev.map((r) =>
-            r.id === slotIdParam ? { ...newRule, ...existing, sourceVar } : r
+            r.id === slotIdParam ? { ...newRule, formatPattern, sourceVar } : r
           );
         }
 
