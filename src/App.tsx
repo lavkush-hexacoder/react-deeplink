@@ -306,6 +306,8 @@ export default function DeepLinkTemplateBuilder() {
   const [mappingRules, setMappingRules] = useState<MappingRule[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [slotFilter, setSlotFilter] = useState<string>("");
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   const handleParse = useCallback(() => {
     const cleaned = sanitizeUrlInput(exampleUrl);
@@ -435,15 +437,48 @@ export default function DeepLinkTemplateBuilder() {
     };
   }, [parsed, exampleUrl, mappingRules]);
 
-  const handleExportTemplate = useCallback(() => {
+  const handleSaveTemplate = useCallback(async () => {
     const template = getTemplate();
     if (!template) {
-      alert("Please parse a URL first");
+      setSaveMessage("Please parse a URL first");
       return;
     }
-    console.log("Template Object:", JSON.stringify(template, null, 2));
-    // In a real app, you would send this to your backend API
-    // Example: await fetch('/api/templates', { method: 'POST', body: JSON.stringify(template) });
+
+    setIsSaving(true);
+    setSaveMessage(null);
+
+    try {
+      const response = await fetch(
+        "http://localhost:3000/channel-partner/078c2c3d-354d-4d0b-8de5-ceeb16187194/configV2",
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(template),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ message: "Failed to save template" }));
+        throw new Error(
+          errorData.message || `HTTP error! status: ${response.status}`
+        );
+      }
+
+      const result = await response.json();
+      setSaveMessage("Template saved successfully!");
+      console.log("Template saved:", result);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to save template";
+      setSaveMessage(`Error: ${errorMessage}`);
+      console.error("Error saving template:", error);
+    } finally {
+      setIsSaving(false);
+    }
   }, [getTemplate]);
 
   return (
@@ -576,13 +611,33 @@ export default function DeepLinkTemplateBuilder() {
 
       {parsed && (
         <section>
-          <h2>3. Export Template</h2>
-          <button
-            onClick={handleExportTemplate}
-            style={{ padding: "0.5rem 1rem" }}
-          >
-            Export Template Object
-          </button>
+          <h2>3. Save Template</h2>
+          <div style={{ marginBottom: "1rem" }}>
+            <button
+              onClick={handleSaveTemplate}
+              disabled={isSaving}
+              style={{
+                padding: "0.5rem 1rem",
+                backgroundColor: isSaving ? "#ccc" : "#007bff",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: isSaving ? "not-allowed" : "pointer",
+              }}
+            >
+              {isSaving ? "Saving..." : "Save Template"}
+            </button>
+            {saveMessage && (
+              <div
+                style={{
+                  marginTop: "0.5rem",
+                  color: saveMessage.startsWith("Error") ? "red" : "green",
+                }}
+              >
+                {saveMessage}
+              </div>
+            )}
+          </div>
           <pre
             style={{
               marginTop: "1rem",
