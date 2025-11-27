@@ -29,6 +29,7 @@ interface MappingRule {
   index: number | null;
   sourceVar: string;
   formatPattern: string;
+  uppercase: boolean;
 }
 
 interface Template {
@@ -246,6 +247,7 @@ function autoSuggestMappings(
 
     let sourceVar: string | null = null;
     let formatPattern = "";
+    let uppercase = false;
 
     if (
       ["checkin", "ci", "arrive", "from", "fechaentrada"].some((k) =>
@@ -272,6 +274,7 @@ function autoSuggestMappings(
       sourceVar = "currency";
     } else if (name === "promo" || name === "promocode" || name === "code") {
       sourceVar = "promoCode";
+      uppercase = true;
     } else if (name.includes("hotelcode") || name.includes("hotelid")) {
       sourceVar = "hotelId";
     } else if (name === "nights") {
@@ -286,6 +289,7 @@ function autoSuggestMappings(
         index: slot.index,
         sourceVar,
         formatPattern: formatPattern || defaultFormatForVar(sourceVar),
+        uppercase,
       });
     }
   });
@@ -357,15 +361,21 @@ export default function DeepLinkTemplateBuilder() {
           index: slot.index,
           sourceVar,
           formatPattern: defaultFormatForVar(sourceVar),
+          uppercase: false,
         };
 
         if (existing) {
           // If sourceVar changed, reset formatPattern to default for new sourceVar
           // This ensures formatPattern is cleared when switching from date to non-date fields
           const formatPattern = defaultFormatForVar(sourceVar);
+          // Preserve uppercase setting if sourceVar didn't change, otherwise reset to false
+          const uppercase =
+            existing.sourceVar === sourceVar ? existing.uppercase : false;
 
           return prev.map((r) =>
-            r.id === slotIdParam ? { ...newRule, formatPattern, sourceVar } : r
+            r.id === slotIdParam
+              ? { ...newRule, formatPattern, sourceVar, uppercase }
+              : r
           );
         }
 
@@ -379,6 +389,15 @@ export default function DeepLinkTemplateBuilder() {
     (slotIdParam: string, formatPattern: string) => {
       setMappingRules((prev) =>
         prev.map((r) => (r.id === slotIdParam ? { ...r, formatPattern } : r))
+      );
+    },
+    []
+  );
+
+  const handleUppercaseChange = useCallback(
+    (slotIdParam: string, uppercase: boolean) => {
+      setMappingRules((prev) =>
+        prev.map((r) => (r.id === slotIdParam ? { ...r, uppercase } : r))
       );
     },
     []
@@ -536,6 +555,9 @@ export default function DeepLinkTemplateBuilder() {
                 <th style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
                   Format
                 </th>
+                <th style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                  Uppercase
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -590,6 +612,19 @@ export default function DeepLinkTemplateBuilder() {
                           }
                           placeholder="YYYY-MM-DD"
                           style={{ width: "100%", padding: "0.25rem" }}
+                        />
+                      ) : (
+                        <span>—</span>
+                      )}
+                    </td>
+                    <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                      {rule?.sourceVar ? (
+                        <input
+                          type="checkbox"
+                          checked={rule?.uppercase || false}
+                          onChange={(e) =>
+                            handleUppercaseChange(id, e.target.checked)
+                          }
                         />
                       ) : (
                         <span>—</span>
